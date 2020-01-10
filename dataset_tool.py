@@ -19,7 +19,12 @@ import tensorflow as tf
 import PIL.Image
 import dnnlib.tflib as tflib
 
+import cv2  # pip install opencv-python
+
 from training import dataset
+
+ROOT_DIR = '/home/anpei/Desktop'
+sys.path.append(ROOT_DIR)
 
 #----------------------------------------------------------------------------
 
@@ -61,6 +66,48 @@ class TFRecordExporter:
         order = np.arange(self.expected_images)
         np.random.RandomState(123).shuffle(order)
         return order
+
+    def add_image_with_mask(self, img):
+        if self.print_progress and self.cur_images % self.progress_interval == 0:
+            print('%d / %d\r' %
+                (self.cur_images, self.expected_images), end='', flush=True)
+        if self.shape is None:
+            self.shape = img.shape
+            self.resolution_log2 = int(np.log2(self.shape[1]))
+            assert self.shape[0] == 4
+            assert self.shape[1] == self.shape[2]
+            assert self.shape[1] == 2**self.resolution_log2
+            tfr_opt = tf.python_io.TFRecordOptions(
+                tf.python_io.TFRecordCompressionType.NONE)
+            for lod in range(self.resolution_log2 - 1):
+                tfr_file = self.tfr_prefix + \
+                    '-r%02d.tfrecords' % (self.resolution_log2 - lod)
+                self.tfr_writers.append(
+                    tf.python_io.TFRecordWriter(tfr_file, tfr_opt))
+        assert img.shape == self.shape
+        
+        for lod, tfr_writer in enumerate(self.tfr_writers):
+            if lod:
+                img_seg = img[3, :, :]
+                img_seg = cv2.resize(
+                    img_seg, (int(img.shape[1]/2), int(img.shape[2]/2)),
+                    interpolation=cv2.INTER_NEAREST)
+                img_seg = np.expand_dims(img_seg, axis=0)
+
+                img = img.astype(np.float32)
+                img = (img[:3, 0::2, 0::2] + img[:3, 0::2, 1::2] +
+                       img[:3, 1::2, 0::2] + img[:3, 1::2, 1::2]) * 0.25
+                img = np.concatenate((img, img_seg), axis=0)
+                
+            quant = np.rint(img).clip(0, 255).astype(np.uint8)
+            # print('..', np.unique(quant[3, :, :]), quant.shape)
+
+            ex = tf.train.Example(features=tf.train.Features(feature={
+                'shape': tf.train.Feature(int64_list=tf.train.Int64List(value=quant.shape)),
+                'data': tf.train.Feature(bytes_list=tf.train.BytesList(value=[quant.tostring()]))}))
+            tfr_writer.write(ex.SerializeToString())
+     
+        self.cur_images += 1
 
     def add_image(self, img):
         if self.print_progress and self.cur_images % self.progress_interval == 0:
@@ -194,7 +241,6 @@ def display(tfrecord_dir):
     tflib.init_tf({'gpu_options.allow_growth': True})
     dset = dataset.TFRecordDataset(tfrecord_dir, max_label_size='full', repeat=False, shuffle_mb=0)
     tflib.init_uninitialized_vars()
-    import cv2  # pip install opencv-python
 
     idx = 0
     while True:
@@ -405,7 +451,6 @@ def create_svhn(tfrecord_dir, svhn_dir):
 def create_lsun(tfrecord_dir, lmdb_dir, resolution=256, max_images=None):
     print('Loading LSUN dataset from "%s"' % lmdb_dir)
     import lmdb # pip install lmdb # pylint: disable=import-error
-    import cv2 # pip install opencv-python
     import io
     with lmdb.open(lmdb_dir, readonly=True).begin(write=False) as txn:
         total_images = txn.stat()['entries'] # pylint: disable=no-value-for-parameter
@@ -440,7 +485,6 @@ def create_lsun_wide(tfrecord_dir, lmdb_dir, width=512, height=384, max_images=N
     assert height <= width
     print('Loading LSUN dataset from "%s"' % lmdb_dir)
     import lmdb # pip install lmdb # pylint: disable=import-error
-    import cv2 # pip install opencv-python
     import io
     with lmdb.open(lmdb_dir, readonly=True).begin(write=False) as txn:
         total_images = txn.stat()['entries'] # pylint: disable=no-value-for-parameter
@@ -497,6 +541,72 @@ def create_celeba(tfrecord_dir, celeba_dir, cx=89, cy=121):
             img = img.transpose(2, 0, 1) # HWC => CHW
             tfr.add_image(img)
 
+#----------------------------------------------------------------------------
+
+def create_from_images_with_mask(tfrecord_dir, image_dir, shuffle, masked=True, types=['.png']):
+
+    from Dense_FA_3d import worker_util as fa_worker
+    from pathlib import Path
+
+    segNet, segTransform = fa_worker.initSegmentNet()
+    print('DONE init segNet')
+
+    failed_list = []
+
+    print('Loading images from "%s"' % image_dir)
+    image_filenames = []
+    for img_type in types:
+        image_filenames.extend(
+            list(Path(image_dir).rglob('*'+img_type)))
+
+    image_filenames = sorted(image_filenames)
+
+    if len(image_filenames) == 0:
+        error('No input images found')
+
+    img_idx = 0
+    while True:
+        try:
+            img = np.asarray(PIL.Image.open(image_filenames[img_idx]))
+            break
+        except OSError:
+            img_idx = img_idx + 1
+            continue
+
+    resolution = img.shape[0]
+    channels = img.shape[2] if img.ndim == 3 else 1
+
+    if img.shape[1] != resolution:
+        error('Input images must have the same width and height')
+    if resolution != 2 ** int(np.floor(np.log2(resolution))):
+        error('Input image resolution must be a power-of-two')
+    if channels not in [1, 3]:
+        error('Input images must be stored as RGB or grayscale')
+
+    with TFRecordExporter(tfrecord_dir, len(image_filenames)) as tfr:
+        order = tfr.choose_shuffled_order() if shuffle else np.arange(len(image_filenames))
+        for idx in range(order.size):
+            try:
+                img = PIL.Image.open(image_filenames[order[idx]])
+                seg_map = fa_worker.segmentImage(img, segNet, segTransform)
+
+                if masked:
+                    seg_map[seg_map!=0] = 1
+                    seg_map = np.expand_dims(seg_map, axis=2)
+                    img = img * seg_map
+                    img = img.transpose([2, 0, 1])  # HWC => CHW
+                    tfr.add_image(img)
+                else:
+                    img = np.dstack((img, seg_map))
+                    img = img.transpose([2, 0, 1])  # HWC => CHW
+                    tfr.add_image_with_mask(img)
+
+            except OSError:
+                failed_list.append(image_filenames[order[idx]])
+                continue
+    
+    with open(os.path.join(tfrecord_dir, 'failed.txt'), 'w') as f:
+        f.write('\n'.join(failed_list))
 #----------------------------------------------------------------------------
 
 def create_from_images(tfrecord_dir, image_dir, shuffle):
@@ -624,6 +734,16 @@ def execute_cmdline(argv):
     p.add_argument(     'tfrecord_dir',     help='New dataset directory to be created')
     p.add_argument(     'image_dir',        help='Directory containing the images')
     p.add_argument(     '--shuffle',        help='Randomize image order (default: 1)', type=int, default=1)
+
+    p = add_command('create_from_images_with_mask', 'Create dataset from a directory full of images with segmentation mask.',
+                     'create_from_images_with_mask datasets/mydataset myimagedir')
+    p.add_argument('tfrecord_dir',
+                   help='New dataset directory to be created')
+    p.add_argument('image_dir',        help='Directory containing the images')
+    p.add_argument('--shuffle',
+                   help='Randomize image order (default: 1)', type=int, default=1)
+    p.add_argument('--masked',
+                   help='Randomize image order (default: 1)', type=bool, default=True)
 
     p = add_command(    'create_from_hdf5', 'Create dataset from legacy HDF5 archive.',
                                             'create_from_hdf5 datasets/celebahq ~/downloads/celeba-hq-1024x1024.h5')
