@@ -19,13 +19,16 @@ from metrics import metric_base
 #----------------------------------------------------------------------------
 # Just-in-time processing of training images before feeding them to the networks.
 
-def process_reals(x, labels, lod, mirror_augment, drange_data, drange_net):
+def process_reals(x, labels, lod, mirror_augment, drange_data, drange_net, mask_augment=False):
     with tf.name_scope('DynamicRange'):
         x = tf.cast(x, tf.float32)
         x = misc.adjust_dynamic_range(x, drange_data, drange_net)
     if mirror_augment:
         with tf.name_scope('MirrorAugment'):
             x = tf.where(tf.random_uniform([tf.shape(x)[0]]) < 0.5, x, tf.reverse(x, [3]))
+    if mask_augment:
+        # masking tensor with semantic segmentation
+        pass
     with tf.name_scope('FadeLOD'): # Smooth crossfade between consecutive levels-of-detail.
         s = tf.shape(x)
         y = tf.reshape(x, [-1, s[1], s[2]//2, 2, s[3]//2, 2])

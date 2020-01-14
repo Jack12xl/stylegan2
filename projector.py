@@ -23,7 +23,8 @@ class Projector:
         self.lr_rampup_length           = 0.05
         self.noise_ramp_length          = 0.75
         self.regularize_noise_weight    = 1e5
-        self.verbose                    = False
+        self.pixel_loss_weight          = 1.0
+        self.verbose                    = True
         self.clone_net                  = True
 
         self._Gs                    = None
@@ -39,7 +40,8 @@ class Projector:
         self._images_expr           = None
         self._target_images_var     = None
         self._lpips                 = None
-        self._dist                  = None
+        self._percep_dist           = None
+        self._pixel_dist            = None
         self._loss                  = None
         self._reg_sizes             = None
         self._lrate_in              = None
@@ -107,8 +109,12 @@ class Projector:
         self._target_images_var = tf.Variable(tf.zeros(proc_images_expr.shape), name='target_images_var')
         if self._lpips is None:
             self._lpips = misc.load_pkl('http://d36zk2xti64re0.cloudfront.net/stylegan1/networks/metrics/vgg16_zhang_perceptual.pkl')
-        self._dist = self._lpips.get_output_for(proc_images_expr, self._target_images_var)
-        self._loss = tf.reduce_sum(self._dist)
+        self._percep_dist = self._lpips.get_output_for(proc_images_expr, self._target_images_var)
+        self._pixel_dist = tf.math.reduce_mean(tf.keras.losses.logcosh(proc_images_expr, self._target_images_var))
+        self._pixel_dist /= 100.0   # balance distance scales
+
+        self._loss = tf.reduce_sum(self._percep_dist)
+        self._loss += self._pixel_dist * self.pixel_loss_weight
 
         # Noise regularization graph.
         self._info('Building noise regularization graph...')
@@ -181,13 +187,13 @@ class Projector:
 
         # Train.
         feed_dict = {self._noise_in: noise_strength, self._lrate_in: learning_rate}
-        _, dist_value, loss_value = tflib.run([self._opt_step, self._dist, self._loss], feed_dict)
+        _, percep_dist, pix_dist, loss_value = tflib.run([self._opt_step, self._percep_dist, self._pixel_dist, self._loss], feed_dict)
         tflib.run(self._noise_normalize_op)
 
         # Print status.
         self._cur_step += 1
         if self._cur_step == self.num_steps or self._cur_step % 10 == 0:
-            self._info('%-8d%-12g%-12g' % (self._cur_step, dist_value, loss_value))
+            self._info('%-8d%-12g%-12g%-12g' % (self._cur_step, percep_dist, pix_dist, loss_value))
         if self._cur_step == self.num_steps:
             self._info('Done.')
 

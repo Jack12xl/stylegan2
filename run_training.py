@@ -8,6 +8,7 @@ import argparse
 import copy
 import os
 import sys
+import glob
 
 import dnnlib
 from dnnlib import EasyDict
@@ -33,7 +34,7 @@ _valid_configs = [
 
 #----------------------------------------------------------------------------
 
-def run(dataset, data_dir, result_dir, config_id, num_gpus, total_kimg, gamma, mirror_augment, metrics):
+def run(dataset, data_dir, result_dir, config_id, num_gpus, total_kimg, gamma, mirror_augment, metrics, resume_pkl=None):
     train     = EasyDict(run_func_name='training.training_loop.training_loop') # Options for training loop.
     G         = EasyDict(func_name='training.networks_stylegan2.G_main')       # Options for generator network.
     D         = EasyDict(func_name='training.networks_stylegan2.D_stylegan2')  # Options for discriminator network.
@@ -49,7 +50,16 @@ def run(dataset, data_dir, result_dir, config_id, num_gpus, total_kimg, gamma, m
     train.data_dir = data_dir
     train.total_kimg = total_kimg
     train.mirror_augment = mirror_augment
-    train.image_snapshot_ticks = train.network_snapshot_ticks = 10
+    train.image_snapshot_ticks = train.network_snapshot_ticks = 10    
+    # resume training with lastest checkpoint if exist
+    if resume_pkl is None:
+        # try to recover from latest checkpoint
+        ckpt_files = glob.glob(os.path.join(result_dir, 'network-snapshot-*.pkl'))
+        if ckpt_files:
+            resume_pkl = sorted(ckpt_files)[-1]
+    
+    train.resume_pkl = resume_pkl
+
     sched.G_lrate_base = sched.D_lrate_base = 0.002
     sched.minibatch_size_base = 32
     sched.minibatch_gpu_base = 4
@@ -168,23 +178,25 @@ def main():
     parser.add_argument('--gamma', help='R1 regularization weight (default is config dependent)', default=None, type=float)
     parser.add_argument('--mirror-augment', help='Mirror augment (default: %(default)s)', default=False, metavar='BOOL', type=_str_to_bool)
     parser.add_argument('--metrics', help='Comma-separated list of metrics or "none" (default: %(default)s)', default='fid50k', type=_parse_comma_sep)
+    parser.add_argument('--resume_pkl', help='Path of previous checkpoint(*.pkl) to resume trainig from.')
 
     args = parser.parse_args()
+    print(args)
 
-    if not os.path.exists(args.data_dir):
-        print ('Error: dataset root directory does not exist.')
-        sys.exit(1)
+    # if not os.path.exists(args.data_dir):
+    #     print ('Error: dataset root directory does not exist.')
+    #     sys.exit(1)
 
-    if args.config_id not in _valid_configs:
-        print ('Error: --config value must be one of: ', ', '.join(_valid_configs))
-        sys.exit(1)
+    # if args.config_id not in _valid_configs:
+    #     print ('Error: --config value must be one of: ', ', '.join(_valid_configs))
+    #     sys.exit(1)
 
-    for metric in args.metrics:
-        if metric not in metric_defaults:
-            print ('Error: unknown metric \'%s\'' % metric)
-            sys.exit(1)
+    # for metric in args.metrics:
+    #     if metric not in metric_defaults:
+    #         print ('Error: unknown metric \'%s\'' % metric)
+    #         sys.exit(1)
 
-    run(**vars(args))
+    # run(**vars(args))
 
 #----------------------------------------------------------------------------
 
