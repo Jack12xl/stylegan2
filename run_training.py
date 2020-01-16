@@ -183,20 +183,20 @@ def main():
     args = parser.parse_args()
     print(args)
 
-    # if not os.path.exists(args.data_dir):
-    #     print ('Error: dataset root directory does not exist.')
-    #     sys.exit(1)
+    if not os.path.exists(args.data_dir):
+        print ('Error: dataset root directory does not exist.')
+        sys.exit(1)
 
-    # if args.config_id not in _valid_configs:
-    #     print ('Error: --config value must be one of: ', ', '.join(_valid_configs))
-    #     sys.exit(1)
+    if args.config_id not in _valid_configs:
+        print ('Error: --config value must be one of: ', ', '.join(_valid_configs))
+        sys.exit(1)
 
-    # for metric in args.metrics:
-    #     if metric not in metric_defaults:
-    #         print ('Error: unknown metric \'%s\'' % metric)
-    #         sys.exit(1)
+    for metric in args.metrics:
+        if metric not in metric_defaults:
+            print ('Error: unknown metric \'%s\'' % metric)
+            sys.exit(1)
 
-    # run(**vars(args))
+    run(**vars(args))
 
 #----------------------------------------------------------------------------
 
