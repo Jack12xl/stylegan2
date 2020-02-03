@@ -14,14 +14,36 @@ import dnnlib
 import dnnlib.tflib as tflib
 
 #----------------------------------------------------------------------------
+# Helper func for constructing a dataset object using the given options.
+
+def load_dataset(class_name=None, data_dir=None, verbose=False, **kwargs):
+    kwargs = dict(kwargs)
+    if 'tfrecord_dir' in kwargs:
+        if class_name is None:
+            class_name = __name__ + '.TFRecordDataset'
+        if data_dir is not None:
+            kwargs['tfrecord_dir'] = os.path.join(
+                data_dir, kwargs['tfrecord_dir'])
+
+    assert class_name is not None
+    if verbose:
+        print('Streaming data using %s...' % class_name)
+    dataset = dnnlib.util.get_obj_by_name(class_name)(**kwargs)
+    if verbose:
+        print('Dataset shape =', np.int32(dataset.shape).tolist())
+        print('Dynamic range =', dataset.dynamic_range)
+        print('Label size    =', dataset.label_size)
+    return dataset
+
+#----------------------------------------------------------------------------
 # Dataset class that loads data from tfrecords files.
 
 class TFRecordDataset:
     def __init__(self,
         tfrecord_dir,               # Directory containing a collection of tfrecords files.
-        resolution      = None,     # Dataset resolution, None = autodetect.
+        resolution      = -1,     # Dataset resolution, None = autodetect.
         label_file      = None,     # Relative path of the labels file, None = autodetect.
-        max_label_size  = 0,        # 0 = no labels, 'full' = full labels, <int> = N first label components.
+        max_label_size  = 512,      # 0 = no labels, 'full' = full labels, <int> = N first label components.
         max_images      = None,     # Maximum number of images to use, None = use all images.
         repeat          = True,     # Repeat dataset indefinitely?
         shuffle_mb      = 4096,     # Shuffle data within specified window (megabytes), 0 = disable shuffling.
@@ -72,7 +94,7 @@ class TFRecordDataset:
 
         # Determine shape and resolution.
         max_shape = max(tfr_shapes, key=np.prod)
-        self.resolution = resolution if resolution is not None else max_shape[1]
+        self.resolution = resolution if resolution > 0 else max_shape[1]
         self.resolution_log2 = int(np.log2(self.resolution))
         self.shape = [max_shape[0], self.resolution, self.resolution]
         tfr_lods = [self.resolution_log2 - int(np.log2(shape[1])) for shape in tfr_shapes]
@@ -174,26 +196,5 @@ class TFRecordDataset:
         shape = ex.features.feature['shape'].int64_list.value # pylint: disable=no-member
         data = ex.features.feature['data'].bytes_list.value[0] # pylint: disable=no-member
         return np.fromstring(data, np.uint8).reshape(shape)
-
-#----------------------------------------------------------------------------
-# Helper func for constructing a dataset object using the given options.
-
-def load_dataset(class_name=None, data_dir=None, verbose=False, **kwargs):
-    kwargs = dict(kwargs)
-    if 'tfrecord_dir' in kwargs:
-        if class_name is None:
-            class_name = __name__ + '.TFRecordDataset'
-        if data_dir is not None:
-            kwargs['tfrecord_dir'] = os.path.join(data_dir, kwargs['tfrecord_dir'])
-
-    assert class_name is not None
-    if verbose:
-        print('Streaming data using %s...' % class_name)
-    dataset = dnnlib.util.get_obj_by_name(class_name)(**kwargs)
-    if verbose:
-        print('Dataset shape =', np.int32(dataset.shape).tolist())
-        print('Dynamic range =', dataset.dynamic_range)
-        print('Label size    =', dataset.label_size)
-    return dataset
 
 #----------------------------------------------------------------------------

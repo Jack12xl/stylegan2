@@ -17,11 +17,9 @@ import traceback
 import numpy as np
 import tensorflow as tf
 import PIL.Image
-import PIL.ImageOps
 import dnnlib.tflib as tflib
 
 import cv2  # pip install opencv-python
-from skimage.measure import label,regionprops
 
 from training import dataset
 
@@ -79,7 +77,6 @@ class TFRecordExporter:
             assert self.shape[0] == 4
             assert self.shape[1] == self.shape[2]
             assert self.shape[1] == 2**self.resolution_log2
-
             tfr_opt = tf.python_io.TFRecordOptions(
                 tf.python_io.TFRecordCompressionType.NONE)
             for lod in range(self.resolution_log2 - 1):
@@ -103,7 +100,7 @@ class TFRecordExporter:
                 img = np.concatenate((img, img_seg), axis=0)
                 
             quant = np.rint(img).clip(0, 255).astype(np.uint8)
-            # print('**', np.unique(quant[3, :, :]), quant.shape)
+            # print('..', np.unique(quant[3, :, :]), quant.shape)
 
             ex = tf.train.Example(features=tf.train.Features(feature={
                 'shape': tf.train.Feature(int64_list=tf.train.Int64List(value=quant.shape)),
@@ -546,43 +543,12 @@ def create_celeba(tfrecord_dir, celeba_dir, cx=89, cy=121):
 
 #----------------------------------------------------------------------------
 
-def _largestConnectComponent(label_image, num):
-    regions = [x.area for x in regionprops(label_image)]
-    print(regions)
-    
-    region_props = regionprops(label_image)
-    max_region, max_idx = region_props[1].area, 1
-    
-    if len(region_props) > 1:
-        for idx, region in enumerate(region_props[2:]):
-            if region.area > max_region:
-                max_idx = idx + 1
-                
-    mcr = (labeled_img == max_idx) 
-    
-    return mcr
-
-def _extract_single_face(mask):
-    # analysis components
-    mask = mask.astype(np.uint8)
-    label_image, num = label(mask, neighbors=4, background=0, return_num=True)
-
-    region_props = regionprops(label_image)
-    
-    max_idx = np.argmax([x.area for x in region_props])
-    bbox = region_props[max_idx].bbox
-    max_label = region_props[max_idx].label
-    mask = (label_image == max_label)
-
-    return mask, bbox
-
-
 def create_from_images_with_mask(tfrecord_dir, image_dir, shuffle, masked=True, types=['.png']):
 
     from Dense_FA_3d import worker_util as fa_worker
     from pathlib import Path
 
-    segNet, segTransform = fa_worker.initSegmentNet(mode='img')
+    segNet, segTransform = fa_worker.initSegmentNet()
     print('DONE init segNet')
 
     failed_list = []
@@ -622,26 +588,17 @@ def create_from_images_with_mask(tfrecord_dir, image_dir, shuffle, masked=True, 
         for idx in range(order.size):
             try:
                 img = PIL.Image.open(image_filenames[order[idx]])
-                desired_size = max(img.size)
                 seg_map = fa_worker.segmentImage(img, segNet, segTransform)
 
                 if masked:
-                    mask = (seg_map>=1) * (seg_map<7) + (seg_map>=10) * (seg_map<=13)
-                    mask, bbox = _extract_single_face(mask)
-                    img = img * np.expand_dims(mask, axis=2)
-                    img = img[bbox[0]:bbox[2], bbox[1]:bbox[3], :]
-                    ratio = 1024.0 / max(img.shape)
-                    
-                    img = PIL.Image.fromarray(img)
-                    img = PIL.ImageOps.scale(img, ratio)
-                    img = PIL.ImageOps.pad(img, (1024, 1024))
-
-                    img = np.asarray(img).transpose([2, 0, 1])  # HWC => CHW
+                    seg_map[seg_map!=0] = 1
+                    seg_map = np.expand_dims(seg_map, axis=2)
+                    img = img * seg_map
+                    img = img.transpose([2, 0, 1])  # HWC => CHW
                     tfr.add_image(img)
                 else:
                     img = np.dstack((img, seg_map))
                     img = img.transpose([2, 0, 1])  # HWC => CHW
-                    # print(img.shape)
                     tfr.add_image_with_mask(img)
 
             except OSError:
@@ -650,11 +607,21 @@ def create_from_images_with_mask(tfrecord_dir, image_dir, shuffle, masked=True, 
     
     with open(os.path.join(tfrecord_dir, 'failed.txt'), 'w') as f:
         f.write('\n'.join(failed_list))
+
 #----------------------------------------------------------------------------
 
-def create_from_images(tfrecord_dir, image_dir, shuffle):
+def create_from_images(tfrecord_dir, image_dir, shuffle, label_file=None, types=['.png']):
     print('Loading images from "%s"' % image_dir)
-    image_filenames = sorted(glob.glob(os.path.join(image_dir, '*')))
+
+    from pathlib import Path
+
+    image_filenames = []
+    for img_type in types:
+        image_filenames.extend(
+            list(Path(image_dir).rglob('*'+img_type)))
+
+    image_filenames = sorted(image_filenames)
+
     if len(image_filenames) == 0:
         error('No input images found')
 
@@ -670,13 +637,22 @@ def create_from_images(tfrecord_dir, image_dir, shuffle):
 
     with TFRecordExporter(tfrecord_dir, len(image_filenames)) as tfr:
         order = tfr.choose_shuffled_order() if shuffle else np.arange(len(image_filenames))
-        for idx in range(order.size):
-            img = np.asarray(PIL.Image.open(image_filenames[order[idx]]))
+        image_filenames = [str(image_filenames[i]) for i in order]
+
+        with open(os.path.join(tfrecord_dir, 'img_index.txt'), 'w') as f:
+            f.write('\n'.join(list(image_filenames)))
+
+        for img_fn in image_filenames:
+            img = np.asarray(PIL.Image.open(img_fn))
             if channels == 1:
-                img = img[np.newaxis, :, :] # HW => CHW
+                img = img[np.newaxis, :, :]  # HW => CHW
             else:
-                img = img.transpose([2, 0, 1]) # HWC => CHW
+                img = img.transpose([2, 0, 1])  # HWC => CHW
             tfr.add_image(img)
+
+        if label_file is not None:
+            tfr.add_labels(np.load(label_file)[order])
+        
 
 #----------------------------------------------------------------------------
 
@@ -785,6 +761,8 @@ def execute_cmdline(argv):
     p.add_argument('image_dir',        help='Directory containing the images')
     p.add_argument('--shuffle',
                    help='Randomize image order (default: 1)', type=int, default=1)
+    p.add_argument('--masked',
+                   help='Randomize image order (default: 1)', type=bool, default=True)
 
     p = add_command(    'create_from_hdf5', 'Create dataset from legacy HDF5 archive.',
                                             'create_from_hdf5 datasets/celebahq ~/downloads/celeba-hq-1024x1024.h5')

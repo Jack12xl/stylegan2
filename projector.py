@@ -15,9 +15,9 @@ from training import misc
 
 class Projector:
     def __init__(self):
-        self.num_steps                  = 2000
-        self.dlatent_avg_samples        = 10000
-        self.initial_learning_rate      = 0.1
+        self.num_steps                  = 30000
+        self.dlatent_avg_samples        = 20000
+        self.initial_learning_rate      = 0.3
         self.initial_noise_factor       = 0.05
         self.lr_rampdown_length         = 0.25
         self.lr_rampup_length           = 0.05
@@ -66,7 +66,7 @@ class Projector:
         self._info('Finding W midpoint and stddev using %d samples...' % self.dlatent_avg_samples)
         latent_samples = np.random.RandomState(123).randn(self.dlatent_avg_samples, *self._Gs.input_shapes[0][1:])
         # dlatent_samples = self._Gs.components.mapping.run(latent_samples, None)[:, :1, :] # [N, 1, 512]
-        dlatent_samples = self._Gs.components.mapping.run(latent_samples, None) # [N, 1, 512]
+        dlatent_samples = self._Gs.components.mapping.run(latent_samples, None) # [N, 18, 512]
         self._dlatent_avg = np.mean(dlatent_samples, axis=0, keepdims=True) # [1, 1, 512]
         self._dlatent_std = (np.sum((dlatent_samples - self._dlatent_avg) ** 2) / self.dlatent_avg_samples) ** 0.5
         self._info('std = %g' % self._dlatent_std)
@@ -139,6 +139,19 @@ class Projector:
         self._opt.register_gradients(self._loss, [self._dlatents_var] + self._noise_vars)
         self._opt_step = self._opt.apply_updates()
 
+        # summary
+        self._summary_writer = tf.summary.FileWriter(dnnlib.make_run_dir_path())
+        self._summary_writer.add_graph(tf.get_default_graph())
+
+        print('***', self._dlatents_expr.shape)
+
+        for i in range(self._dlatents_expr.shape[1]):
+            tf.summary.histogram('dlatents_expr/%02d'%(i), self._dlatents_expr[0, i, :])
+            tf.summary.histogram('dlatents_var/%02d'%(i), self._dlatents_var[0, i, :])
+
+        self._summary_op = tf.summary.merge_all()
+
+
     def run(self, target_images):
         # Run to completion.
         self.start(target_images)
@@ -149,7 +162,8 @@ class Projector:
         pres = dnnlib.EasyDict()
         pres.dlatents = self.get_dlatents()
         pres.noises = self.get_noises()
-        pres.images = self.get_images()
+        pres.images = self.get_images()        
+
         return pres
 
     def start(self, target_images):
@@ -189,15 +203,18 @@ class Projector:
 
         # Train.
         feed_dict = {self._noise_in: noise_strength, self._lrate_in: learning_rate}
-        _, percep_dist, pix_dist, loss_value = tflib.run([self._opt_step, self._percep_dist, self._pixel_dist, self._loss], feed_dict)
+        _, percep_dist, pix_dist, loss_value, summaries = tflib.run([self._opt_step, self._percep_dist, self._pixel_dist, self._loss, self._summary_op], feed_dict)
         tflib.run(self._noise_normalize_op)
 
         # Print status.
         self._cur_step += 1
-        if self._cur_step == self.num_steps or self._cur_step % 10 == 0:
+        if self._cur_step == self.num_steps or self._cur_step % 100 == 0:
             self._info('%-8d%-12g%-12g%-12g' % (self._cur_step, percep_dist, pix_dist, loss_value))
+            self._summary_writer.add_summary(summaries, global_step=self._cur_step)
+
         if self._cur_step == self.num_steps:
             self._info('Done.')
+            self._summary_writer.close()
 
     def get_cur_step(self):
         return self._cur_step
