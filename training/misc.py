@@ -13,6 +13,8 @@ import PIL.Image
 import PIL.ImageFont
 import dnnlib
 
+from training.visualize import draw_pose
+
 #----------------------------------------------------------------------------
 # Convenience wrappers for pickle that are able to load data produced by
 # older versions of the code, and from external URLs.
@@ -72,6 +74,30 @@ def convert_to_pil_image(image, drange=[0,1]):
 
 def save_image_grid(images, filename, drange=[0,1], grid_size=None):
     convert_to_pil_image(create_image_grid(images, grid_size), drange).save(filename)
+
+def save_image_grid_with_pose(images, labels, filename, drange=[0, 1], grid_size=[6, 4], max_output=24):
+    if images.shape[0] > max_output:
+        img_idx = np.random.choice(images.shape[0], max_output)
+        images = images[img_idx, :, :, :]
+        labels = labels[img_idx, :]
+
+    H, W = images.shape[-2], images.shape[-1]
+
+    grid_h, grid_w = grid_size
+    new_img = PIL.Image.new("RGB", (W*grid_w, H*grid_h))
+
+    for img_idx in range(images.shape[0]):
+        img = convert_to_pil_image(images[img_idx, :, :, :], drange)
+        cur_label = np.squeeze(labels[img_idx, :])
+        # print('*** cur_label = ', cur_label.shape)
+        output_img = draw_pose(img.copy(), cur_label)
+        W, H = output_img.size
+        x = (img_idx%grid_w) * W
+        y = (img_idx // grid_h) * H
+        # print('*** img size = ', img.size, H, W, x, y, ww, hh)
+        new_img.paste(output_img, (x, y, x+W, y+H))
+
+    new_img.save(filename)
 
 def apply_mirror_augment(minibatch):
     mask = np.random.rand(minibatch.shape[0]) < 0.5

@@ -685,7 +685,7 @@ def D_stylegan2(
     # Output layer with label conditioning from "Which Training Methods for GANs do actually Converge?"
     with tf.variable_scope('Output'):
         x = apply_bias_act(dense_layer(x, fmaps=max(labels_in.shape[1], 1)))
-        if labels_in.shape[1] > 0:
+        if labels_in.shape[1] > 0 and labels_in.shape[1] != 3:
             x = tf.reduce_sum(x * labels_in, axis=1, keepdims=True)
     scores_out = x
 

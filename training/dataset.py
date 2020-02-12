@@ -42,7 +42,7 @@ class TFRecordDataset:
     def __init__(self,
         tfrecord_dir,               # Directory containing a collection of tfrecords files.
         resolution      = -1,     # Dataset resolution, None = autodetect.
-        label_file      = None,     # Relative path of the labels file, None = autodetect.
+        label_file      = 'auto',     # Relative path of the labels file, None = autodetect.
         max_label_size  = 512,      # 0 = no labels, 'full' = full labels, <int> = N first label components.
         max_images      = None,     # Maximum number of images to use, None = use all images.
         repeat          = True,     # Repeat dataset indefinitely?
@@ -83,14 +83,15 @@ class TFRecordDataset:
                 break
 
         # Autodetect label filename.
-        if self.label_file is None:
-            guess = sorted(glob.glob(os.path.join(self.tfrecord_dir, '*.labels')))
-            if len(guess):
-                self.label_file = guess[0]
-        elif not os.path.isfile(self.label_file):
-            guess = os.path.join(self.tfrecord_dir, self.label_file)
-            if os.path.isfile(guess):
-                self.label_file = guess
+        if self.label_file:
+            if self.label_file == 'auto':
+                guess = sorted(glob.glob(os.path.join(self.tfrecord_dir, '*.labels')))
+                if len(guess):
+                    self.label_file = guess[0]
+            elif not os.path.isfile(self.label_file):
+                guess = os.path.join(self.tfrecord_dir, self.label_file)
+                if os.path.isfile(guess):
+                    self.label_file = guess
 
         # Determine shape and resolution.
         max_shape = max(tfr_shapes, key=np.prod)
@@ -106,7 +107,7 @@ class TFRecordDataset:
         # Load labels.
         assert max_label_size == 'full' or max_label_size >= 0
         self._np_labels = np.zeros([1<<30, 0], dtype=np.float32)
-        if self.label_file is not None and max_label_size != 0:
+        if self.label_file and max_label_size != 0:
             self._np_labels = np.load(self.label_file)
             assert self._np_labels.ndim == 2
         if max_label_size != 'full' and self._np_labels.shape[1] > max_label_size:

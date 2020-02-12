@@ -34,7 +34,7 @@ _valid_configs = [
 
 #----------------------------------------------------------------------------
 
-def run(dataset, resolution, data_dir, result_dir, config_id, num_gpus, total_kimg, gamma, mirror_augment, metrics, resume_pkl=None):
+def run(dataset, resolution, data_dir, result_dir, config_id, num_gpus, total_kimg, gamma, mirror_augment, metrics, label_file='', resume_pkl=None):
     train     = EasyDict(run_func_name='training.training_loop.training_loop') # Options for training loop.
     G         = EasyDict(func_name='training.networks_stylegan2.G_main')       # Options for generator network.
     D         = EasyDict(func_name='training.networks_stylegan2.D_stylegan2')  # Options for discriminator network.
@@ -42,6 +42,7 @@ def run(dataset, resolution, data_dir, result_dir, config_id, num_gpus, total_ki
     D_opt     = EasyDict(beta1=0.0, beta2=0.99, epsilon=1e-8)                  # Options for discriminator optimizer.
     G_loss    = EasyDict(func_name='training.loss.G_logistic_ns_pathreg')      # Options for generator loss.
     D_loss    = EasyDict(func_name='training.loss.D_logistic_r1')              # Options for discriminator loss.
+    C_loss    = EasyDict(func_name='training.loss.C_attribute_loss')           # Options for discriminator loss.
     sched     = EasyDict()                                                     # Options for TrainingSchedule.
     grid      = EasyDict(size='8k', layout='random')                           # Options for setup_snapshot_image_grid().
     sc        = dnnlib.SubmitConfig()                                          # Options for dnnlib.submit_run().
@@ -68,7 +69,7 @@ def run(dataset, resolution, data_dir, result_dir, config_id, num_gpus, total_ki
     desc = 'stylegan2'
 
     desc += '-' + dataset
-    dataset_args = EasyDict(tfrecord_dir=dataset, resolution=resolution)
+    dataset_args = EasyDict(tfrecord_dir=dataset, resolution=resolution, label_file=label_file)
 
     assert num_gpus in [1, 2, 4, 8]
     sc.num_gpus = num_gpus
@@ -122,7 +123,7 @@ def run(dataset, resolution, data_dir, result_dir, config_id, num_gpus, total_ki
     sc.submit_target = dnnlib.SubmitTarget.LOCAL
     sc.local.do_not_copy_source_files = True
     kwargs = EasyDict(train)
-    kwargs.update(G_args=G, D_args=D, G_opt_args=G_opt, D_opt_args=D_opt, G_loss_args=G_loss, D_loss_args=D_loss)
+    kwargs.update(G_args=G, D_args=D, G_opt_args=G_opt, D_opt_args=D_opt, G_loss_args=G_loss, D_loss_args=D_loss, C_loss_args=C_loss)
     kwargs.update(dataset_args=dataset_args, sched_args=sched, grid_args=grid, metric_arg_list=metrics, tf_config=tf_config)
     kwargs.submit_config = copy.deepcopy(sc)
     kwargs.submit_config.run_dir_root = result_dir
@@ -172,9 +173,11 @@ def main():
     parser.add_argument('--result-dir', help='Root directory for run results (default: %(default)s)', default='results', metavar='DIR')
     parser.add_argument('--data-dir', help='Dataset root directory', required=True)
     parser.add_argument('--dataset', help='Training dataset', required=True)
-    parser.add_argument(
-        '--resolution', help='Training resolution (default: %(default)s)', default=-1, type=int, metavar='RESO')
-    parser.add_argument('--config', help='Training config (default: %(default)s)', default='config-f', required=True, dest='config_id', metavar='CONFIG')
+    parser.add_argument('--resolution', help='Training resolution (default: %(default)s)', default=-1, type=int, metavar='RESO')
+    parser.add_argument('--label-file', help='Training labels (default: %(default)s)',
+                        default='auto', metavar='RESO')
+    parser.add_argument('--config', help='Training config (default: %(default)s)',
+                        default='config-f', required=True, dest='config_id', metavar='CONFIG')
     parser.add_argument('--num-gpus', help='Number of GPUs (default: %(default)s)', default=1, type=int, metavar='N')
     parser.add_argument('--total-kimg', help='Training length in thousands of images (default: %(default)s)', metavar='KIMG', default=25000, type=int)
     parser.add_argument('--gamma', help='R1 regularization weight (default is config dependent)', default=None, type=float)

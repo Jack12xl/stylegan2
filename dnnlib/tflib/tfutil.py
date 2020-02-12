@@ -36,6 +36,13 @@ def is_tf_expression(x: Any) -> bool:
     return isinstance(x, (tf.Tensor, tf.Variable, tf.Operation))
 
 
+def is_onehot_label(x: Any) -> bool:
+    """Check whether the input is a valid onehot label."""
+    y, _ = tf.unique(x)
+    return (tf.equal(tf.sort(y), [0, 1])) and (tf.sum(y) == 1)
+    return isinstance(x, (tf.Tensor, tf.Variable, tf.Operation))
+
+
 def shape_to_list(shape: Iterable[tf.Dimension]) -> List[Union[int, None]]:
     """Convert a Tensorflow shape to a list of ints. Retained for backwards compatibility -- use TensorShape.as_list() in new code."""
     return [dim.value for dim in shape]
